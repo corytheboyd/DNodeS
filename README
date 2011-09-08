@@ -1,0 +1,11 @@
+NODE MODULE DEPENDANCIES:
+db-mysql, generic-pool
+
+USAGE:
+Make changes to configuration file
+
+Start the server:
+  $ node dnodes.js #opens connection on port 53 of provided host.
+  
+
+

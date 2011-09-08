@@ -14,95 +14,48 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEAL
 */
 
 var sys = require('sys'),
-  dgram = require('dgram'),
-  dnsSupport = require('./lib/dnssupport.js'),
-  responseHandler = require('./lib/responsehandler.js'),
-  confBuilder = require('./lib/confbuilder.js');
+    dgram = require('dgram'),
+		fs = require('fs'),
+    dnsSupport = require('./lib/dnssupport.js'),
+    confBuilder = require('./lib/confbuilder.js');
 
-configPath = './dnsserver.conf'; //the path to the configuration file
-conf = null; //stores the configuration object, which is built when the server starts
+const CONFIG_PATH = './dnsserver.conf'; //the path to the configuration file
+var conf = null; //stores the configuration object, which is built when the server starts
 
 var server = dgram.createSocket('udp4');
 
 server.on('message', function(msg, rinfo) {
-  var query = processRequest(msg);
-  sendResponse(query, rinfo);
+  var query = dnsSupport.processRequest(msg);
+  dnsSupport.sendResponse(conf, query, server, rinfo);
 });
 
-var processRequest = function(req) {
-  //see rfc1035 for details on what the hell is happening down there
-  //http://tools.ietf.org/html/rfc1035#section-4.1.1
-
-  var query = {
-    header: {},
-    question: {},
-  };
-
-  var tmpSlice;
-  var tmpByte;
-
-  query.header.id = req.slice(0,2);
-
-  tmpSlice = req.slice(2,3);
-  tmpByte = tmpSlice.toString('binary', 0, 1).charCodeAt(0);
-
-  query.header.qr = dnsSupport.sliceBits(tmpByte, 0,1);
-  query.header.opcode = dnsSupport.sliceBits(tmpByte, 1,4);
-  query.header.aa = dnsSupport.sliceBits(tmpByte, 5,1);
-  query.header.tc = dnsSupport.sliceBits(tmpByte, 6,1);
-  query.header.rd = dnsSupport.sliceBits(tmpByte, 7,1);
-
-  tmpSlice = req.slice(3,4);
-  tmpByte = tmpSlice.toString('binary', 0, 1).charCodeAt(0);
-
-  query.header.ra = dnsSupport.sliceBits(tmpByte, 0,1);
-  query.header.z = dnsSupport.sliceBits(tmpByte, 1,3);
-  query.header.rcode = dnsSupport.sliceBits(tmpByte, 4,4);
-  query.header.qdcount = req.slice(4,6);
-  query.header.ancount = req.slice(6,8);
-  query.header.nscount = req.slice(8,10);
-  query.header.arcount = req.slice(10, 12);
-
-  query.question.qname = req.slice(12, req.length - 4);
-  query.question.qtype = req.slice(req.length - 4, req.length - 2);
-  query.question.qclass = req.slice(req.length - 2, req.length);
-
-  return query;
-};
-
-var sendResponse = function(query, rinfo) {
-  var domain = dnsSupport.bufferToDomain( query.question.qname );
-  var type = dnsSupport.bufferToNumber( query.question.qtype );
+/*
+  Watches the configuration file for changes, and updates the object
+  when needed. The server host and port cannot be changed while the
+  server is running
+*/
+fs.watchFile(CONFIG_PATH, { persistent: true, interval: 5 }, function(curr, prev) {
+  confBuilder.build(CONFIG_PATH, function(newConf) {
+		if (!newConf) return;
+		
+    if (conf.options.host != newConf.options.host) console.log('Note: the server host will not be changed until the server is restarted.');
+    if (conf.options.port != newConf.options.port) console.log('Note: the server port will not be changed until the server is restarted.');
   
-  //fetch record from the specified datastore
-  conf.fetchRecord(conf, domain, type, function(record) {
-  
-    var respObject = responseHandler.create(conf, query, type, record);
-    var buf = responseHandler.createResponseBuffer(respObject);
-    
-    server.send(buf, 0, buf.length, rinfo.port, rinfo.address, function (err, sent) {
-      if (err) {
-        console.log( "Unable to send response to: " + rinfo.address + ":" + rinfo.port );
-      } else {
-        console.log( "Response sent to: " + rinfo.address + ":" + rinfo.port );
-      }
-    });
-  
-  });  
-};
+    conf = newConf; //store the configration object
+  });
+});
 
 // -------------------------------------------
 
 /*
  * Build the configuration file, then start the server
  */
-(function() {
-  confBuilder.build(configPath, function(newConf) {
-    conf = newConf; //store the configration object globally,
-    
-    server.bind(conf.options.port, conf.options.host);
-    
-    console.log('Started server on ' + conf.options.host + ':' + conf.options.port );
-    console.log('Using ' +  conf.options.dataStoreMethod + ' as the data store');
-  });
-})();
+confBuilder.build(CONFIG_PATH, function(newConf) {
+	if (!newConf) throw Error('Need valid configuration to start server');
+	
+  conf = newConf; //store the configration object globally
+
+  server.bind(conf.options.port, conf.options.host);
+  
+  console.log('Started server on ' + conf.options.host + ':' + conf.options.port );
+});
